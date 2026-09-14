@@ -55,12 +55,17 @@ pub enum ClientRequest {
 /// A message sent from the server to a client.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ServerMessage {
-    /// Sent on connect to advertise available resources.
+    /// The resources the server currently offers, in priority order.
+    ///
+    /// Sent on connect, and again to every connected client whenever the list
+    /// changes (a device plugged in, a device removed). It is the whole list,
+    /// not a delta: a client replaces its view, so a missed push costs nothing.
     Advertise {
         /// Resources that are currently available for acquisition.
         available_resources: Vec<Resource>,
     },
-    /// Grants the client's resource request.
+    /// Grants the client's resource request, or hands it a resource it already
+    /// holds with a fresh fd (the device behind it went away and came back).
     Grant {
         /// The resource granted for the client, with one fd.
         resource: Resource,

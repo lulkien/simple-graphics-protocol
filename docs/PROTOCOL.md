@@ -41,11 +41,17 @@ sequenceDiagram
         C->>S: Release {resource}  (= revoke ack)
         S-->>C: Grant {resource} → next waiter (revoked owner requeued)
     end
+    opt resource list changed (device plugged in / removed)
+        S-->>C: Advertise {available_resources} (the whole list, again)
+    end
 ```
 
-- Server sends `Advertise` immediately on connect (no hello).
-- Every message names **exactly one resource**; multi-resource clients
-  acquire one at a time.
+- Server sends `Advertise` immediately on connect (no hello), and again to every
+  connected client whenever its resource list changes — a device appearing or
+  going away. It is always the WHOLE list, never a delta, so a client replaces
+  its view and a missed push costs nothing.
+- Every message names **exactly one resource** (the list in `Advertise`
+  excepted); multi-resource clients acquire one at a time.
 - A **queued** Acquire gets no reply — `Grant` arrives when the resource
   frees. A `Grant` with no preceding `Acquire` = re-grant after preemption;
   keep reading after `Release`.
@@ -60,7 +66,9 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-    A[Acquire] --> F{resource free?}
+    A[Acquire] --> S{"Input, already held, and<br/>the client holds no display?"}
+    S -->|yes| D0[Deny — only the app on the display can take it]
+    S -->|no| F{resource free?}
     F -->|yes| G[Grant immediately]
     F -->|no| O{owner == requester?}
     O -->|yes| D[Deny]
@@ -69,6 +77,30 @@ flowchart TD
     P -->|latest-owner / fair-queue| Q[queue + preempt owner]
     Q --> W[wait — Grant when freed]
 ```
+
+**Input is owned by class.** A client that holds no display may still hold a
+device nobody else asks for, but only that: it never takes a device from another
+holder, and it never queues for one. The client that holds the display (`Drm` or
+`Fbdev`) outranks it — it takes the device whenever it asks (the holder is
+revoked first, and the request is served ahead of every other waiter,
+independently of `SGC_POLICY`), and when that client stops holding the display
+(Release, a preemption handoff, a disconnect) the daemon revokes the devices it
+held, so input never stays with an app that is off screen. `SGC_POLICY` then
+arbitrates only the display itself.
+
+**A device that goes away is not revoked.** When an input device disappears from
+the machine (unplugged) the server SUSPENDS its resource: nothing is sent to the
+holder, which keeps it, and the resource leaves the advertised list — it cannot
+be granted while its device is away. The client sees its own fd die (libinput
+reports `DEVICE_REMOVED`) and drops the device while keeping the claim. When the
+device returns — on the same node or on another one of the same class — the
+server registers the fresh fd and sends that same client a `Grant` for the
+resource it never lost: an unsolicited `Grant` means "here it is again, replace
+your fd", not "you were requeued". There is no re-acquire, no `Revoke`, and no
+window in which another client could take the name. The same resource stays
+reserved for its holder while the device is away: that is the cost of the
+guarantee. An app that is re-granted the DISPLAY still has to acquire its devices
+again.
 
 ## Messages
 
@@ -123,6 +155,10 @@ Hex: `Acquire{Drm{0}}` = `81 a7 41 63 71 75 69 72 65 81 a8 72 65 73 6f 75 72 63 
 
 Hex: `Revoke{Drm{0}}` = `81 a6 52 65 76 6f 6b 65 81 a8 72 65 73 6f 75 72 63 65 81 a3 44 72 6d 81 a4 63 61 72 64 00` ·
 `Deny{"owned"}` = `81 a4 44 65 6e 79 81 a6 72 65 61 73 6f 6e a5 6f 77 6e 65 64`
+
+`Advertise` is state, not a reply: it arrives on connect and then whenever the
+server's list changes. A client that ignores a later one keeps working — it just
+keeps the connect-time view.
 
 ## C implementation notes
 
