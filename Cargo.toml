@@ -1,6 +1,6 @@
 # The wire contract between the sgc daemon (@sgc) and its clients.
-# Standalone crate (own repo): consumed by the daemon and every client
-# library via path deps in dev, git deps once published.
+# Standalone crate (own repo), published on crates.io: the daemon takes it as a
+# version plus the sibling path (local development), the consumers as a version.
 [package]
 name = "simple-graphics-protocol"
 version = "0.1.0"
